@@ -10,8 +10,11 @@
 #define UTIL_LINUX_ALL_IO_H
 
 #include <string.h>
-#include <unistd.h>
 #include <errno.h>
+
+#if !defined(_WIN32)
+
+#include <unistd.h>
 
 #include "c.h"
 
@@ -78,5 +81,6 @@ static inline ssize_t read_all(int fd, char *buf, size_t count)
 	return c;
 }
 
+#endif
 
 #endif /* UTIL_LINUX_ALL_IO_H */
