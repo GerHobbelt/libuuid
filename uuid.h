@@ -38,7 +38,9 @@
 #include <sys/types.h>
 #ifndef _WIN32
 #include <sys/time.h>
+#define HAVE_UUID_STRUCT_TIMEVAL   1
 #endif
+#include <stdint.h>
 #include <time.h>
 
 typedef unsigned char uuid_t[16];
@@ -93,7 +95,10 @@ void uuid_unparse_lower(const uuid_t uu, char *out);
 void uuid_unparse_upper(const uuid_t uu, char *out);
 
 /* uuid_time.c */
+#if defined(HAVE_UUID_STRUCT_TIMEVAL)
 time_t uuid_time(const uuid_t uu, struct timeval *ret_tv);
+#endif
+
 int uuid_type(const uuid_t uu);
 int uuid_variant(const uuid_t uu);
 
