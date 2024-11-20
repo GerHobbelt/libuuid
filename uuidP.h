@@ -32,10 +32,14 @@
  * %End-Header%
  */
 
+#ifdef HAVE_INTTYPES_H
 #include <inttypes.h>
+#else
+#include <uuid/uuid_types.h>
+#endif
 #include <sys/types.h>
 
-#include "uuid.h"
+#include <uuid/uuid.h>
 
 #define LIBUUID_CLOCK_FILE	"/var/lib/libuuid/clock.txt"
 
@@ -53,6 +57,14 @@ struct uuid {
 	uint8_t	node[6];
 };
 
+#ifndef __GNUC_PREREQ
+#if defined(__GNUC__) && defined(__GNUC_MINOR__)
+#define __GNUC_PREREQ(maj, min) \
+	((__GNUC__ << 16) + __GNUC_MINOR__ >= ((maj) << 16) + (min))
+#else
+#define __GNUC_PREREQ(maj, min) 0
+#endif
+#endif
 
 /*
  * prototypes

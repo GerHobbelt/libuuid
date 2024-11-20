@@ -33,27 +33,34 @@
 THREAD_LOCAL unsigned short ul_jrand_seed[3];
 #endif
 
-static int random_get_fd(void)
-{
-	int i, fd;
-	struct timeval	tv;
-
-	gettimeofday(&tv, 0);
-	fd = open("/dev/urandom", O_RDONLY);
-	if (fd == -1)
-		fd = open("/dev/random", O_RDONLY | O_NONBLOCK);
-	if (fd >= 0) {
-		i = fcntl(fd, F_GETFD);
-		if (i >= 0)
-			fcntl(fd, F_SETFD, i | FD_CLOEXEC);
-	}
-	srand((getpid() << 16) ^ getuid() ^ tv.tv_sec ^ tv.tv_usec);
-
-#ifdef DO_JRAND_MIX
-	ul_jrand_seed[0] = getpid() ^ (tv.tv_sec & 0xFFFF);
-	ul_jrand_seed[1] = getppid() ^ (tv.tv_usec & 0xFFFF);
-	ul_jrand_seed[2] = (tv.tv_sec ^ tv.tv_usec) >> 16;
+#ifdef HAVE_SRANDOM
+#define srand(x) 	srandom(x)
+#define rand() 		random()
 #endif
+
+static int get_random_fd(void)
+{
+	struct timeval	tv;
+	static int	fd = -2;
+	int		i;
+
+	if (fd == -2) {
+		gettimeofday(&tv, 0);
+		fd = open("/dev/urandom", O_RDONLY);
+		if (fd == -1)
+			fd = open("/dev/random", O_RDONLY | O_NONBLOCK);
+		if (fd >= 0) {
+			i = fcntl(fd, F_GETFD);
+			if (i >= 0)
+				fcntl(fd, F_SETFD, i | FD_CLOEXEC);
+		}
+		srand(((unsigned)getpid() << 16) ^ getuid() ^ tv.tv_sec ^ tv.tv_usec);
+#ifdef DO_JRAND_MIX
+		ul_jrand_seed[0] = getpid() ^ (tv.tv_sec & 0xFFFF);
+		ul_jrand_seed[1] = getppid() ^ (tv.tv_usec & 0xFFFF);
+		ul_jrand_seed[2] = (tv.tv_sec ^ tv.tv_usec) >> 16;
+#endif
+	}
 	/* Crank the random number generator a few times */
 	gettimeofday(&tv, 0);
 	for (i = (tv.tv_sec ^ tv.tv_usec) & 0x1F; i > 0; i--)
@@ -67,13 +74,24 @@ static int random_get_fd(void)
  * Use /dev/urandom if possible, and if not,
  * use glibc pseudo-random functions.
  */
-void random_get_bytes(void *buf, size_t nbytes)
+void get_random_bytes(void *buf, size_t nbytes)
 {
 	size_t i, n = nbytes;
-	int fd = random_get_fd();
+	int fd;
 	int lose_counter = 0;
-	unsigned char *cp = (unsigned char *) buf;
+	unsigned char *cp = buf;
 
+#ifdef HAVE_GETRANDOM
+	i = getrandom(buf, nbytes, 0);
+	if (i == nbytes)
+		return;
+#endif
+#ifdef HAVE_GETENTROPY
+	if (getentropy(buf, nbytes) == 0)
+		return;
+#endif
+
+	fd = get_random_fd();
 	if (fd >= 0) {
 		while (n > 0) {
 			ssize_t x = read(fd, cp, n);

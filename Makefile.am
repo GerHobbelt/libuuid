@@ -38,3 +38,9 @@ noinst_HEADERS = \
 libuuid_la_LIBADD  = $(SOCKET_LIBS)
 libuuid_la_CFLAGS  = -I$(top_srcdir)
 libuuid_la_LDFLAGS = -version-info $(LIBUUID_VERSION_INFO)
+
+uuid_time: $(srcdir)/uuid_time.c $(DEPLIBUUID)
+	$(E) "	LD $@"
+	$(Q) $(CC) $(ALL_CFLAGS) $(LDFLAGS) -DDEBUG -o uuid_time \
+		$(srcdir)/uuid_time.c $(LIBUUID)
+

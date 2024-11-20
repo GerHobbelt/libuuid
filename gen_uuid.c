@@ -37,6 +37,7 @@
  * gcc-wall wall mode
  */
 #define _SVID_SOURCE
+#define _DEFAULT_SOURCE	  /* since glibc 2.20 _SVID_SOURCE is deprecated */
 
 #ifdef _WIN32
 #define _WIN32_WINNT 0x0500
@@ -58,12 +59,18 @@
 #ifdef HAVE_SYS_TIME_H
 #include <sys/time.h>
 #endif
+#ifdef HAVE_SYS_WAIT_H
+#include <sys/wait.h>
+#endif
 #include <sys/stat.h>
 #ifdef HAVE_SYS_FILE_H
 #include <sys/file.h>
 #endif
 #ifdef HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>
+#endif
+#ifdef HAVE_SYS_RANDOM_H
+#include <sys/random.h>
 #endif
 #ifdef HAVE_SYS_SOCKET_H
 #include <sys/socket.h>
@@ -85,6 +92,9 @@
 #endif
 #if defined(__linux__) && defined(HAVE_SYS_SYSCALL_H)
 #include <sys/syscall.h>
+#endif
+#ifdef HAVE_SYS_RESOURCE_H
+#include <sys/resource.h>
 #endif
 
 #include "all-io.h"
@@ -195,6 +205,9 @@ static int get_node_id(unsigned char *node_id)
  * just sizeof(struct ifreq)
  */
 #ifdef HAVE_SA_LEN
+#ifndef max
+#define max(a,b) ((a) > (b) ? (a) : (b))
+#endif
 #define ifreq_size(i) max(sizeof(struct ifreq),\
      sizeof((i).ifr_name)+(i).ifr_addr.sa_len)
 #else
@@ -272,6 +285,9 @@ static int get_clock(uint32_t *clock_high, uint32_t *clock_low,
 	THREAD_LOCAL FILE		*state_f;
 	THREAD_LOCAL uint16_t		clock_seq;
 	struct timeval			tv;
+#ifndef _WIN32
+	struct flock			fl;
+#endif
 	uint64_t			clock_reg;
 	mode_t				save_umask;
 	int				len;
@@ -281,7 +297,7 @@ static int get_clock(uint32_t *clock_high, uint32_t *clock_low,
 		save_umask = umask(0);
 		state_fd = open(LIBUUID_CLOCK_FILE, O_RDWR|O_CREAT|O_CLOEXEC, 0660);
 		(void) umask(save_umask);
-		if (state_fd != -1) {
+		if (state_fd >= 0) {
 			state_f = fdopen(state_fd, "r+" UL_CLOEXECSTR);
 			if (!state_f) {
 				close(state_fd);
@@ -292,9 +308,15 @@ static int get_clock(uint32_t *clock_high, uint32_t *clock_low,
 		else
 			ret = -1;
 	}
+#ifndef _WIN32
+	fl.l_type = F_WRLCK;
+	fl.l_whence = SEEK_SET;
+	fl.l_start = 0;
+	fl.l_len = 0;
+	fl.l_pid = 0;
 	if (state_fd >= 0) {
 		rewind(state_f);
-		while (flock(state_fd, LOCK_EX) < 0) {
+		while (fcntl(state_fd, F_SETLKW, &fl) < 0) {
 			if ((errno == EAGAIN) || (errno == EINTR))
 				continue;
 			fclose(state_f);
@@ -304,6 +326,7 @@ static int get_clock(uint32_t *clock_high, uint32_t *clock_low,
 			break;
 		}
 	}
+#endif
 	if (state_fd >= 0) {
 		unsigned int cl;
 		unsigned long tv1, tv2;
@@ -319,7 +342,7 @@ static int get_clock(uint32_t *clock_high, uint32_t *clock_low,
 	}
 
 	if ((last.tv_sec == 0) && (last.tv_usec == 0)) {
-		random_get_bytes(&clock_seq, sizeof(clock_seq));
+		get_random_bytes(&clock_seq, sizeof(clock_seq));
 		clock_seq &= 0x3FFF;
 		gettimeofday(&last, 0);
 		last.tv_sec--;
@@ -355,18 +378,27 @@ try_again:
 		last.tv_usec = last.tv_usec % 1000000;
 	}
 
-	if (state_fd >= 0) {
+	if (state_fd > 0) {
 		rewind(state_f);
 		len = fprintf(state_f,
 			      "clock: %04x tv: %016lu %08lu adj: %08d\n",
-			      clock_seq, last.tv_sec, last.tv_usec, adjustment);
+			      clock_seq, (unsigned long)last.tv_sec,
+			      (unsigned long)last.tv_usec, adjustment);
 		fflush(state_f);
 		if (ftruncate(state_fd, len) < 0) {
 			fprintf(state_f, "                   \n");
 			fflush(state_f);
 		}
 		rewind(state_f);
+#ifndef _WIN32
+		fl.l_type = F_UNLCK;
+		if (fcntl(state_fd, F_SETLK, &fl) < 0) {
+			fclose(state_f);
+			state_fd = -1;
+		}
+#else
 		flock(state_fd, LOCK_UN);
+#endif		
 	}
 
 	*clock_high = clock_reg >> 32;
@@ -375,7 +407,66 @@ try_again:
 	return ret;
 }
 
-#if defined(HAVE_UUIDD) && defined(HAVE_SYS_UN_H)
+#if defined(USE_UUIDD) && defined(HAVE_SYS_UN_H)
+static ssize_t read_all(int fd, char *buf, size_t count)
+{
+	ssize_t ret;
+	ssize_t c = 0;
+	int tries = 0;
+
+	memset(buf, 0, count);
+	while (count > 0) {
+		ret = read(fd, buf, count);
+		if (ret <= 0) {
+			if ((errno == EAGAIN || errno == EINTR || ret == 0) &&
+			    (tries++ < 5))
+				continue;
+			return c ? c : -1;
+		}
+		if (ret > 0)
+			tries = 0;
+		count -= ret;
+		buf += ret;
+		c += ret;
+	}
+	return c;
+}
+
+/*
+ * Close all file descriptors
+ */
+static void close_all_fds(void)
+{
+	int i, max;
+
+#if defined(HAVE_SYSCONF) && defined(_SC_OPEN_MAX)
+	max = sysconf(_SC_OPEN_MAX);
+#elif defined(HAVE_GETDTABLESIZE)
+	max = getdtablesize();
+#elif defined(HAVE_GETRLIMIT) && defined(RLIMIT_NOFILE)
+	struct rlimit rl;
+
+	getrlimit(RLIMIT_NOFILE, &rl);
+	max = rl.rlim_cur;
+#else
+	max = OPEN_MAX;
+#endif
+
+	for (i=0; i < max; i++) {
+		close(i);
+		if (i <= 2)
+			open("/dev/null", O_RDWR);
+	}
+}
+#endif /* defined(USE_UUIDD) && defined(HAVE_SYS_UN_H) */
+
+#if __GNUC_PREREQ (4, 6)
+#pragma GCC diagnostic push
+#if !defined(USE_UUIDD) || !defined(HAVE_SYS_UN_H)
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#endif
+#endif
+
 /*
  * Try using the uuidd daemon to generate the UUID
  *
@@ -383,12 +474,18 @@ try_again:
  */
 static int get_uuid_via_daemon(int op, uuid_t out, int *num)
 {
+#if defined(USE_UUIDD) && defined(HAVE_SYS_UN_H)
 	char op_buf[64];
 	int op_len;
 	int s;
 	ssize_t ret;
 	int32_t reply_len = 0, expected = 16;
 	struct sockaddr_un srv_addr;
+	struct stat st;
+	pid_t pid;
+	static const char *uuidd_path = UUIDD_PATH;
+	static int access_ret = -2;
+	static int start_attempts = 0;
 
 	if ((s = socket(AF_UNIX, SOCK_STREAM, 0)) < 0)
 		return -1;
@@ -397,9 +494,27 @@ static int get_uuid_via_daemon(int op, uuid_t out, int *num)
 	strcpy(srv_addr.sun_path, UUIDD_SOCKET_PATH);
 
 	if (connect(s, (const struct sockaddr *) &srv_addr,
-		    sizeof(struct sockaddr_un)) < 0)
-		goto fail;
-
+		    sizeof(struct sockaddr_un)) < 0) {
+		if (access_ret == -2)
+			access_ret = access(uuidd_path, X_OK);
+		if (access_ret == 0)
+			access_ret = stat(uuidd_path, &st);
+		if (access_ret == 0 && (st.st_mode & (S_ISUID | S_ISGID)) == 0)
+			access_ret = access(UUIDD_DIR, W_OK);
+		if (access_ret == 0 && start_attempts++ < 5) {
+			if ((pid = fork()) == 0) {
+				close_all_fds();
+				execl(uuidd_path, "uuidd", "-qT", "300",
+				      (char *) NULL);
+				exit(1);
+			}
+			(void) waitpid(pid, 0, 0);
+			if (connect(s, (const struct sockaddr *) &srv_addr,
+				    sizeof(struct sockaddr_un)) < 0)
+				goto fail;
+		} else
+			goto fail;
+	}
 	op_buf[0] = op;
 	op_len = 1;
 	if (op == UUIDD_OP_BULK_TIME_UUID) {
@@ -431,14 +546,12 @@ static int get_uuid_via_daemon(int op, uuid_t out, int *num)
 
 fail:
 	close(s);
+#endif
 	return -1;
 }
 
-#else /* !defined(HAVE_UUIDD) && defined(HAVE_SYS_UN_H) */
-static int get_uuid_via_daemon(int op, uuid_t out, int *num)
-{
-	return -1;
-}
+#if __GNUC_PREREQ (4, 6)
+#pragma GCC diagnostic pop
 #endif
 
 int __uuid_generate_time(uuid_t out, int *num)
@@ -451,7 +564,7 @@ int __uuid_generate_time(uuid_t out, int *num)
 
 	if (!has_init) {
 		if (get_node_id(node_id) <= 0) {
-			random_get_bytes(node_id, 6);
+			get_random_bytes(node_id, 6);
 			/*
 			 * Set multicast bit, to prevent conflicts
 			 * with IEEE 802 addresses obtained from
@@ -549,7 +662,7 @@ void __uuid_generate_random(uuid_t out, int *num)
 		n = *num;
 
 	for (i = 0; i < n; i++) {
-		random_get_bytes(buf, sizeof(buf));
+		get_random_bytes(buf, sizeof(buf));
 		uuid_unpack(buf, &uu);
 
 		uu.clock_seq = (uu.clock_seq & 0x3FFF) | 0x8000;

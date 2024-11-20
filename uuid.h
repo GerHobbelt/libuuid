@@ -46,8 +46,8 @@
 typedef unsigned char uuid_t[16];
 
 /* UUID Variant definitions */
-#define UUID_VARIANT_NCS	0
-#define UUID_VARIANT_DCE	1
+#define UUID_VARIANT_NCS 	0
+#define UUID_VARIANT_DCE 	1
 #define UUID_VARIANT_MICROSOFT	2
 #define UUID_VARIANT_OTHER	3
 
