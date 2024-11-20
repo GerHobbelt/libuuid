@@ -1,170 +1,216 @@
+# Makefile for the UUID library
+#
+
 srcdir = @srcdir@
 top_srcdir = @top_srcdir@
 VPATH = @srcdir@
-top_builddir = .
-my_dir = .
+top_builddir = ../..
+my_dir = lib/uuid
 INSTALL = @INSTALL@
 MKDIR_P = @MKDIR_P@
 
 @MCONFIG@
 
-% : %.sh
+all:: 
 
-@RESIZER_CMT@RESIZE_DIR= resize
-@DEBUGFS_CMT@DEBUGFS_DIR= debugfs
-@UUID_CMT@UUID_LIB_SUBDIR= lib/uuid
-@BLKID_CMT@BLKID_LIB_SUBDIR= lib/blkid
-@E2SCRUB_CMT@E2SCRUB_DIR= scrub
-@ALL_CMT@SUPPORT_LIB_SUBDIR= lib/support
-@ALL_CMT@E2P_LIB_SUBDIR= lib/e2p
-@ALL_CMT@EXT2FS_LIB_SUBDIR= lib/ext2fs
+SMANPAGES=	uuid.3 uuid_clear.3 uuid_compare.3 uuid_copy.3 \
+		uuid_generate.3 uuid_is_null.3 uuid_parse.3 \
+		uuid_time.3 uuid_unparse.3
 
-LIB_SUBDIRS=lib/et lib/ss $(E2P_LIB_SUBDIR) $(UUID_LIB_SUBDIR) \
-	$(BLKID_LIB_SUBDIR) $(SUPPORT_LIB_SUBDIR) $(EXT2FS_LIB_SUBDIR)
+OBJS=		clear.o \
+		compare.o \
+		copy.o \
+		gen_uuid.o \
+		isnull.o \
+		pack.o \
+		parse.o \
+		unpack.o \
+		unparse.o \
+		uuid_time.o
 
-PROG_SUBDIRS=e2fsck $(DEBUGFS_DIR) misc $(RESIZE_DIR) tests/progs \
-	tests/fuzz po $(E2SCRUB_DIR)
+SRCS=		$(srcdir)/clear.c \
+		$(srcdir)/compare.c \
+		$(srcdir)/copy.c \
+		$(srcdir)/gen_uuid.c \
+		$(srcdir)/isnull.c \
+		$(srcdir)/pack.c \
+		$(srcdir)/parse.c \
+		$(srcdir)/unpack.c \
+		$(srcdir)/unparse.c \
+		$(srcdir)/uuid_time.c
 
-SUBDIRS=util $(LIB_SUBDIRS) $(PROG_SUBDIRS) tests
+LIBRARY= libuuid
+LIBDIR= uuid
 
-SUBS= util/subst.conf lib/config.h $(top_builddir)/lib/dirpaths.h \
-	lib/ext2fs/ext2_types.h lib/blkid/blkid_types.h lib/uuid/uuid_types.h
+ELF_VERSION = 1.2
+ELF_SO_VERSION = 1
+ELF_IMAGE = libuuid
+ELF_MYDIR = uuid
+ELF_INSTALL_DIR = $(root_libdir)
+ELF_OTHER_LIBS = 
 
-TAR=tar
+BSDLIB_VERSION = 1.1
+BSDLIB_IMAGE = libuuid
+BSDLIB_MYDIR = uuid
+BSDLIB_INSTALL_DIR = $(root_libdir)
 
-all:: subs
-	$(MAKE) libs
-@ALL_CMT@	$(MAKE) progs
-@ALL_CMT@	$(MAKE) docs
+@MAKEFILE_LIBRARY@
+@MAKEFILE_ELF@
+@MAKEFILE_BSDLIB@
+@MAKEFILE_PROFILE@
 
-all-static::
-	$(MAKE) libs
-@ALL_CMT@	$(MAKE) static-progs
+.c.o:
+	$(E) "	CC $<"
+	$(Q) $(CC) $(ALL_CFLAGS_STLIB) -c $< -o $@
+	$(Q) $(CHECK_CMD) $(ALL_CFLAGS) $<
+	$(Q) $(CPPCHECK_CMD) $(CPPFLAGS) $<
+@PROFILE_CMT@	$(Q) $(CC) $(ALL_CFLAGS_STLIB) -g -pg -o profiled/$*.o -c $<
+@ELF_CMT@	$(Q) $(CC) $(ALL_CFLAGS_SHLIB) -fPIC -shared -o elfshared/$*.o -c $<
+@BSDLIB_CMT@	$(Q) $(CC) $(ALL_CFLAGS_SHLIB) $(BSDLIB_PIC_FLAG) -o pic/$*.o -c $<
 
-subs: $(DEP_SUBSTITUTE)
-	@for i in $(SUBS) ; do if test -d `dirname $$i` ; \
-		then $(MAKE) $$i || exit $$? ; fi ; done
-	@(if test -d lib/et ; then cd lib/et && $(MAKE) compile_et; fi)
-	@(if test -d lib/ext2fs ; then cd lib/ext2fs && $(MAKE) ext2_err.h; fi)
-	@(if test -d lib/support ; then cd lib/support && $(MAKE) prof_err.h; fi)
+all:: tst_uuid uuid_time $(SMANPAGES) uuid.pc
 
-progs: all-progs-recursive
-static-progs: all-static-progs-recursive
-libs: all-libs-recursive
-all-progs-recursive all-libs-recursive:: subs
+uuid.h: $(srcdir)/uuid.h.in
+	$(E) "	CP $@"
+	$(Q) cp $(srcdir)/uuid.h.in uuid.h
 
-rpm:
-	sh contrib/build-rpm
+$(top_builddir)/lib/uuid/uuid_types.h: $(srcdir)/uuid_types.h.in $(top_builddir)/config.status
+	cd $(top_builddir); CONFIG_FILES=$(my_dir)/uuid_types.h ./config.status
 
-docs:
-	-@test -d doc && cd doc && $(MAKE) libext2fs.info
+tst_uuid.o: $(srcdir)/tst_uuid.c uuid.h
+	$(E) "	CC $@"
+	$(Q) $(CC) $(ALL_CFLAGS) -c $(srcdir)/tst_uuid.c -o tst_uuid.o
 
-install-doc-libs:
-	-@test -d doc && cd doc && $(MAKE) install-doc-libs
+tst_uuid: tst_uuid.o $(DEPSTATIC_LIBUUID)
+	$(E) "	LD $@"
+	$(Q) $(CC) $(ALL_LDFLAGS) -o tst_uuid tst_uuid.o $(STATIC_LIBUUID)
 
-uninstall-doc-libs:
-	-@test -d doc && cd doc && $(MAKE) uninstall-doc-libs
+uuid_time: $(srcdir)/uuid_time.c $(DEPLIBUUID)
+	$(E) "	LD $@"
+	$(Q) $(CC) $(ALL_CFLAGS) $(LDFLAGS) -DDEBUG -o uuid_time \
+		$(srcdir)/uuid_time.c $(LIBUUID)
 
-clean-doc:
-	-@test -d doc && cd doc && $(MAKE) clean
+uuid.3: $(DEP_SUBSTITUTE) $(srcdir)/uuid.3.in
+	$(E) "	SUBST $@"
+	$(Q) $(SUBSTITUTE_UPTIME) $(srcdir)/uuid.3.in uuid.3
 
-distclean-doc:
-	-test -d doc && cd doc && $(MAKE) distclean
+uuid_clear.3: $(DEP_SUBSTITUTE) $(srcdir)/uuid_clear.3.in
+	$(E) "	SUBST $@"
+	$(Q) $(SUBSTITUTE_UPTIME) $(srcdir)/uuid_clear.3.in uuid_clear.3
 
-install: subs all-libs-recursive install-progs-recursive \
-  install-shlibs-libs-recursive install-doc-libs
-@SUBSET_CMT@	$(MAKE) install-libs
+uuid_compare.3: $(DEP_SUBSTITUTE) $(srcdir)/uuid_compare.3.in
+	$(E) "	SUBST $@"
+	$(Q) $(SUBSTITUTE_UPTIME) $(srcdir)/uuid_compare.3.in uuid_compare.3
 
-install-strip: subs all-libs-recursive install-strip-progs-recursive \
-  install-shlibs-strip-libs-recursive install-doc-libs
+uuid_copy.3: $(DEP_SUBSTITUTE) $(srcdir)/uuid_copy.3.in
+	$(E) "	SUBST $@"
+	$(Q) $(SUBSTITUTE_UPTIME) $(srcdir)/uuid_copy.3.in uuid_copy.3
 
-uninstall: uninstall-progs-recursive uninstall-shlibs-libs-recursive uninstall-doc-libs
+uuid_generate.3: $(DEP_SUBSTITUTE) $(srcdir)/uuid_generate.3.in
+	$(E) "	SUBST $@"
+	$(Q) $(SUBSTITUTE_UPTIME) $(srcdir)/uuid_generate.3.in uuid_generate.3
 
-install-libs: install-libs-recursive
+uuid_is_null.3: $(DEP_SUBSTITUTE) $(srcdir)/uuid_is_null.3.in
+	$(E) "	SUBST $@"
+	$(Q) $(SUBSTITUTE_UPTIME) $(srcdir)/uuid_is_null.3.in uuid_is_null.3
 
-uninstall-libs: uninstall-libs-recursive
+uuid_parse.3: $(DEP_SUBSTITUTE) $(srcdir)/uuid_parse.3.in
+	$(E) "	SUBST $@"
+	$(Q) $(SUBSTITUTE_UPTIME) $(srcdir)/uuid_parse.3.in uuid_parse.3
 
-coverage.txt: coverage.txt-recursive
+uuid_time.3: $(DEP_SUBSTITUTE) $(srcdir)/uuid_time.3.in
+	$(E) "	SUBST $@"
+	$(Q) $(SUBSTITUTE_UPTIME) $(srcdir)/uuid_time.3.in uuid_time.3
 
-check-recursive: all
+uuid_unparse.3: $(DEP_SUBSTITUTE) $(srcdir)/uuid_unparse.3.in
+	$(E) "	SUBST $@"
+	$(Q) $(SUBSTITUTE_UPTIME) $(srcdir)/uuid_unparse.3.in uuid_unparse.3
 
-TAGS clean-recursive distclean-recursive depend-recursive fullcheck-recursive \
-  check-recursive mostlyclean-recursive realclean-recursive \
-  coverage.txt-recursive:
-	@for subdir in $(SUBDIRS); do \
-	  if test -d $$subdir ; then \
-	    target=`echo $@|$(SED) 's/-recursive//'`; \
-	    echo making $$target in $$subdir; \
-	    (cd $$subdir && $(MAKE) $$target) || exit 1; \
-	  fi ; \
+uuid.pc: $(srcdir)/uuid.pc.in $(top_builddir)/config.status
+	$(E) "	CONFIG.STATUS $@"
+	$(Q) cd $(top_builddir); CONFIG_FILES=lib/uuid/uuid.pc ./config.status
+
+installdirs::
+	$(E) "	MKDIR_P $(libdir) $(includedir)/uuid $(man3dir)"
+	$(Q) $(MKDIR_P) $(DESTDIR)$(libdir)  \
+		$(DESTDIR)$(includedir)/uuid $(DESTDIR)$(man3dir) \
+		$(DESTDIR)$(pkgconfigdir)
+
+install:: all installdirs 
+	$(E) "	INSTALL_DATA $(libdir)/libuuid.a"
+	$(Q) $(INSTALL_DATA) libuuid.a $(DESTDIR)$(libdir)/libuuid.a
+	-$(Q) $(RANLIB) $(DESTDIR)$(libdir)/libuuid.a
+	$(Q) $(CHMOD) $(LIBMODE) $(DESTDIR)$(libdir)/libuuid.a
+	$(E) "	INSTALL_DATA $(includedir)/uuid/uuid.h"
+	$(Q) $(INSTALL_DATA) uuid.h $(DESTDIR)$(includedir)/uuid/uuid.h
+	$(Q) for i in $(SMANPAGES); do \
+		$(RM) -f $(DESTDIR)$(man3dir)/$$i.gz; \
+		echo "	INSTALL_DATA $(man3dir)/$$i"; \
+		$(INSTALL_DATA) $$i $(DESTDIR)$(man3dir)/$$i; \
 	done
+	$(Q) $(RM) -f $(DESTDIR)$(man3dir)/uuid_generate_random.3.gz \
+		$(DESTDIR)$(man3dir)/uuid_generate_time.3.gz
+	$(E) "	LINK $(man3dir)/uuid_generate_random.3"
+	$(Q) (cd $(DESTDIR)$(man3dir); \
+	    $(LN) $(LINK_INSTALL_FLAGS) uuid_generate.3 uuid_generate_random.3)
+	$(E) "	LINK $(man3dir)/uuid_generate_time.3"
+	$(Q) (cd $(DESTDIR)$(man3dir); \
+	    $(LN) $(LINK_INSTALL_FLAGS) uuid_generate.3 uuid_generate_time.3)
+	$(E) "	INSTALL_DATA $(pkgconfigdir)/uuid.pc"
+	$(Q) $(INSTALL_DATA) uuid.pc $(DESTDIR)$(pkgconfigdir)/uuid.pc
 
-all-progs-recursive install-progs-recursive install-strip-progs-recursive \
-  uninstall-progs-recursive coverage.txt-progs-recursive:: all-libs-recursive
-
-
-@ALL_CMT@all-progs-recursive all-static-progs-recursive install-progs-recursive \
-@ALL_CMT@  install-strip-progs-recursive uninstall-progs-recursive \
-@ALL_CMT@  coverage.txt-progs-recursive:: all-libs-recursive
-@ALL_CMT@	@for subdir in $(PROG_SUBDIRS); do \
-@ALL_CMT@	  if test -d $$subdir ; then \
-@ALL_CMT@	    target=`echo $@|$(SED) 's/-progs-recursive//'`; \
-@ALL_CMT@	    echo making $$target in $$subdir; \
-@ALL_CMT@	    (cd $$subdir && $(MAKE) $$target) || exit 1; \
-@ALL_CMT@	  fi ; \
-@ALL_CMT@	done
-
-all-libs-recursive install-libs-recursive install-strip-libs-recursive \
-  uninstall-libs-recursive install-shlibs-libs-recursive \
-  install-shlibs-strip-libs-recursive uninstall-shlibs-libs-recursive \
-  coverage.txt-libs-recursive::
-	@for subdir in $(LIB_SUBDIRS); do \
-	  if test -d $$subdir ; then \
-	    target=`echo $@|$(SED) 's/-libs-recursive//'`; \
-	    echo making $$target in $$subdir; \
-	    (cd $$subdir && $(MAKE) $$target) || exit 1; \
-	  fi ; \
+uninstall::
+	$(RM) -f $(DESTDIR)$(libdir)/libuuid.a \
+		$(DESTDIR)$(pkgconfigdir)/uuid.pc
+	for i in $(SMANPAGES); do \
+		$(RM) -f $(DESTDIR)$(man3dir)/$$i; \
 	done
+	$(RM) -f $(DESTDIR)$(man3dir)/uuid_generate_random.3 $(DESTDIR)$(man3dir)/uuid_generate_time.3
 
-mostlyclean: mostlyclean-recursive mostlyclean-local
+clean::
+	$(RM) -f \#* *.s *.o *.a *~ *.bak core profiled/* uuid.h \
+		../libuuid.a ../libuuid_p.a tst_uuid uuid_time \
+		uuid.pc uuid_types.h $(SMANPAGES)
 
-clean:: clean-recursive clean-local clean-doc
-	$(RM) -f $(SUBS) 
+fullcheck check:: tst_uuid
+	LD_LIBRARY_PATH=$(LIB) DYLD_LIBRARY_PATH=$(LIB) ./tst_uuid
 
-distclean: distclean-doc distclean-recursive
-	$(RM) -rf autom4te.cache ext2ed/Makefile po/stamp-po \
-		asm_types.h config.log public_config.h parse-types.log
-	$(MAKE) distclean-local 
-
-realclean: realclean-recursive realclean-local
-
-depend:: depend-recursive
-
-lib/ext2fs/ext2_types.h: $(DEP_SUBSTITUTE) asm_types.h \
-		$(srcdir)/lib/ext2fs/ext2_types.h.in
-	cd $(top_builddir); CONFIG_FILES=./lib/ext2fs/ext2_types.h ./config.status
-
-lib/blkid/blkid_types.h: $(DEP_SUBSTITUTE) asm_types.h \
-		$(srcdir)/lib/blkid/blkid_types.h.in
-	cd $(top_builddir); CONFIG_FILES=./lib/blkid/blkid_types.h ./config.status
-
-lib/uuid/uuid_types.h: $(DEP_SUBSTITUTE) asm_types.h \
-		$(srcdir)/lib/uuid/uuid_types.h.in
-	cd $(top_builddir); CONFIG_FILES=./lib/uuid/uuid_types.h ./config.status
-
-mostlyclean-local:
-	$(RM) -f \#* *~ *.orig core MAKELOG 
-
-clean-local: mostlyclean-local
-
-distclean-local: clean-local
-	$(RM) -f $(SUBS) $(SUBST_CONF) \
-		config.status config.log config.cache MCONFIG Makefile \
+mostlyclean:: clean
+distclean:: clean
+	$(RM) -f .depend Makefile uuid.pc \
 		$(srcdir)/TAGS $(srcdir)/Makefile.in.old
 
-realclean-local: distclean-local
-	$(RM) -f configure
+#
+# Hack to parallel makes recognize dependencies correctly.
+#
+../../lib/libuuid.a: libuuid.a
+../../lib/libuuid.so: image
+../../lib/libuuid.dylib: image
 
-check::	all check-recursive
+$(OBJS): subdirs uuid.h
 
-fullcheck:: all fullcheck-recursive
+# +++ Dependency line eater +++
+# 
+# Makefile dependencies follow.  This must be the last section in
+# the Makefile.in file
+#
+clear.o: $(srcdir)/clear.c $(top_builddir)/lib/config.h \
+ $(top_builddir)/lib/dirpaths.h $(srcdir)/uuidP.h
+compare.o: $(srcdir)/compare.c $(top_builddir)/lib/config.h \
+ $(top_builddir)/lib/dirpaths.h $(srcdir)/uuidP.h
+copy.o: $(srcdir)/copy.c $(top_builddir)/lib/config.h \
+ $(top_builddir)/lib/dirpaths.h $(srcdir)/uuidP.h
+gen_uuid.o: $(srcdir)/gen_uuid.c $(top_builddir)/lib/config.h \
+ $(top_builddir)/lib/dirpaths.h $(srcdir)/uuidP.h $(srcdir)/uuidd.h
+isnull.o: $(srcdir)/isnull.c $(top_builddir)/lib/config.h \
+ $(top_builddir)/lib/dirpaths.h $(srcdir)/uuidP.h
+pack.o: $(srcdir)/pack.c $(top_builddir)/lib/config.h \
+ $(top_builddir)/lib/dirpaths.h $(srcdir)/uuidP.h
+parse.o: $(srcdir)/parse.c $(top_builddir)/lib/config.h \
+ $(top_builddir)/lib/dirpaths.h $(srcdir)/uuidP.h
+unpack.o: $(srcdir)/unpack.c $(top_builddir)/lib/config.h \
+ $(top_builddir)/lib/dirpaths.h $(srcdir)/uuidP.h
+unparse.o: $(srcdir)/unparse.c $(top_builddir)/lib/config.h \
+ $(top_builddir)/lib/dirpaths.h $(srcdir)/uuidP.h
+uuid_time.o: $(srcdir)/uuid_time.c $(top_builddir)/lib/config.h \
+ $(top_builddir)/lib/dirpaths.h $(srcdir)/uuidP.h
